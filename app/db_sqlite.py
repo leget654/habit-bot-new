@@ -389,12 +389,43 @@ async def get_today_completions(user_id: int) -> set:
 
 
 async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[date] = None) -> bool:
+    """Переключает отметку. Возвращает True если отмечено, False если снято.
+    При снятии — списывает XP, начисленный за эту отметку (анти-дюп).
+    """
     target_date = target_date or date.today()
     ds = target_date.isoformat()
     async with _connect() as db:
         cur = await db.execute("SELECT id, note FROM completions WHERE habit_id=? AND completed_date=?", (habit_id, ds))
         existing = await cur.fetchone()
         if existing:
+            # Снимаем отметку: списываем XP
+            from .constants import XP_PER_HABIT, XP_STREAK_BONUS, XP_PERFECT_DAY_BONUS
+            streak = await get_streak(habit_id, target_date)
+            streak_at_moment = streak + 1
+            xp_to_remove = XP_PER_HABIT + (streak_at_moment - 1) * XP_STREAK_BONUS
+
+            # Проверяем: был ли perfect_day?
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM habits WHERE user_id=? AND is_active=1 AND is_paused=0",
+                (user_id,)
+            )
+            habits_count = (await cur.fetchone())[0]
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM completions WHERE user_id=? AND completed_date=?",
+                (user_id, ds)
+            )
+            completions_count = (await cur.fetchone())[0]
+            if habits_count > 0 and completions_count == habits_count:
+                xp_to_remove += XP_PERFECT_DAY_BONUS
+                await db.execute(
+                    "UPDATE users SET perfect_days_total = MAX(0, perfect_days_total - 1) WHERE user_id=?",
+                    (user_id,)
+                )
+
+            await db.execute(
+                "UPDATE users SET total_xp = MAX(0, total_xp - ?) WHERE user_id=?",
+                (xp_to_remove, user_id)
+            )
             await db.execute(
                 "INSERT INTO undo_log (user_id, action_type, habit_id, completed_date, note) VALUES (?, 'uncomplete', ?, ?, ?)",
                 (user_id, habit_id, ds, existing[1])
@@ -413,7 +444,6 @@ async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[d
             )
             await db.commit()
             return True
-
 
 async def set_completion_note(user_id: int, habit_id: int, target_date: date, note: str):
     ds = target_date.isoformat()
