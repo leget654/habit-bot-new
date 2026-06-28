@@ -402,6 +402,9 @@ async def get_today_completions(user_id: int) -> set:
 
 
 async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[date] = None) -> bool:
+    """Переключает отметку. Возвращает True если отмечено, False если снято.
+    При снятии — списывает XP, начисленный за эту отметку (анти-дюп).
+    """
     target_date = target_date or date.today()
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -410,6 +413,32 @@ async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[d
             habit_id, target_date
         )
         if existing:
+            # Снимаем отметку: списываем XP
+            from .constants import XP_PER_HABIT, XP_STREAK_BONUS, XP_PERFECT_DAY_BONUS
+            streak = await get_streak(habit_id, target_date)
+            streak_at_moment = streak + 1
+            xp_to_remove = XP_PER_HABIT + (streak_at_moment - 1) * XP_STREAK_BONUS
+
+            # Проверяем: был ли perfect_day при этой отметке?
+            habits_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM habits WHERE user_id=$1 AND is_active=1 AND is_paused=0",
+                user_id
+            )
+            completions_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM completions WHERE user_id=$1 AND completed_date=$2",
+                user_id, target_date
+            )
+            if habits_count > 0 and completions_count == habits_count:
+                xp_to_remove += XP_PERFECT_DAY_BONUS
+                await conn.execute(
+                    "UPDATE users SET perfect_days_total = GREATEST(0, perfect_days_total - 1) WHERE user_id=$1",
+                    user_id
+                )
+
+            await conn.execute(
+                "UPDATE users SET total_xp = GREATEST(0, total_xp - $1) WHERE user_id=$2",
+                xp_to_remove, user_id
+            )
             await conn.execute(
                 "INSERT INTO undo_log (user_id, action_type, habit_id, completed_date, note) VALUES ($1,'uncomplete',$2,$3,$4)",
                 user_id, habit_id, target_date, existing["note"]
@@ -426,7 +455,6 @@ async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[d
                 user_id, habit_id, target_date
             )
             return True
-
 
 async def set_completion_note(user_id: int, habit_id: int, target_date: date, note: str):
     pool = await get_pool()
