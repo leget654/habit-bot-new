@@ -185,6 +185,19 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_undo_user ON undo_log(user_id, id DESC)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_quests_user_date ON daily_quests(user_id, quest_date)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS shared_habits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                habit1_id INTEGER NOT NULL,
+                habit2_id INTEGER NOT NULL,
+                user1_id INTEGER NOT NULL,
+                user2_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(habit1_id, habit2_id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_shared_user1 ON shared_habits(user1_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_shared_user2 ON shared_habits(user2_id)")
         await db.commit()
     logger.info("SQLite database initialized")
 
@@ -444,6 +457,7 @@ async def toggle_completion(user_id: int, habit_id: int, target_date: Optional[d
             )
             await db.commit()
             return True
+
 
 async def set_completion_note(user_id: int, habit_id: int, target_date: date, note: str):
     ds = target_date.isoformat()
@@ -879,3 +893,98 @@ async def export_user_data(user_id: int) -> dict:
         "achievements": [dict(a) for a in achs],
         "exported_at": datetime.now().isoformat(),
     }
+
+
+# ── Парные привычки (shared_habits) ──────────────────────────────────────────
+
+async def create_shared_habit(habit1_id: int, habit2_id: int, user1_id: int, user2_id: int) -> int | None:
+    """Создаёт связь между двумя привычками разных пользователей."""
+    if user1_id == user2_id:
+        return None
+    async with _connect() as db:
+        try:
+            cur = await db.execute(
+                "INSERT INTO shared_habits (habit1_id, habit2_id, user1_id, user2_id) VALUES (?,?,?,?)",
+                (habit1_id, habit2_id, user1_id, user2_id)
+            )
+            await db.commit()
+            return cur.lastrowid
+        except Exception:
+            return None
+
+
+async def get_shared_habits(user_id: int) -> list:
+    """Возвращает все парные связи пользователя (с обеих сторон)."""
+    async with _connect() as db:
+        cur = await db.execute(
+            """SELECT s.*,
+               CASE WHEN s.user1_id=? THEN s.habit1_id ELSE s.habit2_id END as my_habit_id,
+               CASE WHEN s.user1_id=? THEN s.habit2_id ELSE s.habit1_id END as partner_habit_id,
+               CASE WHEN s.user1_id=? THEN s.user2_id ELSE s.user1_id END as partner_id,
+               h1.name as my_name, h1.emoji as my_emoji,
+               h2.name as partner_name, h2.emoji as partner_emoji,
+               u.display_name as partner_display_name
+               FROM shared_habits s
+               JOIN habits h1 ON (CASE WHEN s.user1_id=? THEN s.habit1_id ELSE s.habit2_id END) = h1.id
+               JOIN habits h2 ON (CASE WHEN s.user1_id=? THEN s.habit2_id ELSE s.habit1_id END) = h2.id
+               JOIN users u ON (CASE WHEN s.user1_id=? THEN s.user2_id ELSE s.user1_id END) = u.user_id
+               WHERE (s.user1_id=? OR s.user2_id=?)
+               ORDER BY s.created_at DESC""",
+            (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id)
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_shared_streak(habit1_id: int, habit2_id: int) -> int:
+    """Общий стрик: сколько дней подряд отметил ХОТЯ БЫ ОДИН из партнёров."""
+    async with _connect() as db:
+        cur = await db.execute(
+            "SELECT DISTINCT completed_date FROM completions WHERE habit_id IN (?,?) ORDER BY completed_date DESC",
+            (habit1_id, habit2_id)
+        )
+        rows = await cur.fetchall()
+    if not rows:
+        return 0
+    dates_sorted = sorted([date.fromisoformat(r[0]) for r in rows], reverse=True)
+    today = date.today()
+    streak = 0
+    check = today
+    for d in dates_sorted:
+        if d == check:
+            streak += 1
+            check -= timedelta(days=1)
+        elif d == check + timedelta(days=1):
+            break
+        else:
+            break
+    return streak
+
+
+async def get_shared_today_status(habit1_id: int, habit2_id: int) -> dict:
+    """Статус отметок сегодня для обоих партнёров."""
+    today = date.today()
+    async with _connect() as db:
+        cur = await db.execute(
+            "SELECT habit_id FROM completions WHERE habit_id IN (?,?) AND completed_date=?",
+            (habit1_id, habit2_id, today.isoformat())
+        )
+        rows = await cur.fetchall()
+    done_habits = {r[0] for r in rows}
+    return {
+        "i_done": habit1_id in done_habits,
+        "partner_done": habit2_id in done_habits,
+        "any_done": len(done_habits) > 0,
+        "both_done": len(done_habits) == 2,
+    }
+
+
+async def delete_shared_habit(shared_id: int, user_id: int) -> bool:
+    """Удаляет парную связь (может любой из двух)."""
+    async with _connect() as db:
+        cur = await db.execute(
+            "DELETE FROM shared_habits WHERE id=? AND (user1_id=? OR user2_id=?)",
+            (shared_id, user_id, user_id)
+        )
+        await db.commit()
+        return cur.rowcount > 0
