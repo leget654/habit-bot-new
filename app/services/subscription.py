@@ -71,6 +71,10 @@ async def grant_subscription(user_id: int, days: int = SUBSCRIPTION_DAYS):
 
 
 async def can_add_habit(user_id: int) -> bool:
+    # Админам — безлимит
+    from ..constants import ADMIN_USER_IDS
+    if user_id in ADMIN_USER_IDS:
+        return True
     status = await get_subscription_status(user_id)
     if status["is_premium"]:
         return True
