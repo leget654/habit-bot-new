@@ -35,12 +35,13 @@ def main_menu_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="📤 Экспорт", callback_data="export_data")],
         [InlineKeyboardButton(text="🏆 Рейтинг", callback_data="show_leaderboard"),
          InlineKeyboardButton(text="👥 Друзья", callback_data="show_friends")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="show_profile"),
-         InlineKeyboardButton(text="🏅 Достижения", callback_data="show_achievements")],
-        [InlineKeyboardButton(text="⚙️ Управление", callback_data="show_manage"),
+        [InlineKeyboardButton(text="🤝 Парные", callback_data="show_shared"),
+         InlineKeyboardButton(text="👤 Профиль", callback_data="show_profile")],
+        [InlineKeyboardButton(text="🏅 Достижения", callback_data="show_achievements"),
          InlineKeyboardButton(text="✨ Premium", callback_data="show_premium")],
-        [InlineKeyboardButton(text="❄️ Заморозки стрика", callback_data="show_freezes"),
-         InlineKeyboardButton(text="🎯 Квесты", callback_data="show_quests")],
+        [InlineKeyboardButton(text="⚙️ Управление", callback_data="show_manage"),
+         InlineKeyboardButton(text="❄️ Заморозки", callback_data="show_freezes")],
+        [InlineKeyboardButton(text="🎯 Квесты", callback_data="show_quests")],
     ])
 
 
