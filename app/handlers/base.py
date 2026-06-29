@@ -187,7 +187,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def reply_stats(msg: Message):
         await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
         from .stats import _send_stats
-        await _send_stats(msg.from_user.id, msg)
+        await _send_stats(msg.from_user.id, msg, year=date.today().year, month=date.today().month)
 
     @dp.message(F.text == "🏆 Рейтинг")
     async def reply_leaderboard(msg: Message):
@@ -217,8 +217,8 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     @dp.message(F.text == "👥 Друзья")
     async def reply_friends(msg: Message):
         await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
-        from .social import _send_friends_screen
-        await _send_friends_screen(msg.from_user.id, msg)
+        from .social import send_friends_screen
+        await send_friends_screen(msg.from_user.id, msg)
 
     # ── Профиль ──────────────────────────────────────────────────────────
     async def _send_profile(user_id: int, target):
