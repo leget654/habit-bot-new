@@ -39,6 +39,8 @@ async def process_completion(user_id: int, habit_id: int, completed_at: datetime
         "perfect_day": False,
         "early_bird": False,
         "night_owl": False,
+        "shared_bonus": False,
+        "shared_partner_name": "",
     }
 
     habit = await db.get_habit(habit_id)
@@ -71,6 +73,20 @@ async def process_completion(user_id: int, habit_id: int, completed_at: datetime
             ach = await db.grant_extra_achievement(user_id, "stacker")
             if ach:
                 result["new_achievements"].append(ach)
+
+    # Парная привычка — бонус +10 XP если оба отметили сегодня
+    try:
+        shared = await db.get_shared_habits(user_id)
+        for s in shared:
+            if s["my_habit_id"] == habit_id:
+                status = await db.get_shared_today_status(s["my_habit_id"], s["partner_habit_id"])
+                if status["both_done"]:
+                    xp_earned += 10
+                    result["shared_bonus"] = True
+                    result["shared_partner_name"] = s.get("partner_display_name", "")
+                break
+    except Exception:
+        pass
 
     old_xp = await db.get_user_xp(user_id)
     from ..constants import get_level
