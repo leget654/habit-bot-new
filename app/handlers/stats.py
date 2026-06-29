@@ -18,6 +18,139 @@ from ..services.stats import (
 )
 
 
+async def _send_stats(user_id: int, target, year: int = None, month: int = None,
+                      habit_id: int = None, category: str = None):
+    today = date.today()
+    year = year or today.year
+    month = month or today.month
+
+    if habit_id:
+        habits = [await db.get_habit(habit_id)]
+        habits = [h for h in habits if h]
+    elif category:
+        habits = await db.get_habits(user_id, include_paused=False, category=category)
+    else:
+        habits = await db.get_habits(user_id)
+
+    if not habits:
+        text = "Нет привычек. Добавь первую!"
+        if hasattr(target, 'message_id'):
+            await target.answer(text)
+        else:
+            await target.edit_text(text)
+        return
+
+    lines = [f"📊 <b>Статистика — {format_month_ru(year, month)}</b>\n"]
+    for h in habits:
+        streak = await db.get_streak(h["id"])
+        best = await db.get_best_streak(h["id"])
+        stats = await db.get_monthly_stats(h["id"], year, month)
+        streak_icon = "🔥" if streak >= 3 else ("✨" if streak > 0 else "💤")
+        if h["monthly_goal"]:
+            bar = goal_progress_bar(stats["completed"], h["monthly_goal"])
+            goal_line = f"  {bar} {stats['completed']}/{h['monthly_goal']} дн."
+        else:
+            bar = progress_bar(stats["percent"])
+            goal_line = f"  {bar} {stats['percent']}%"
+        lines.append(
+            f"{h['emoji']} <b>{h['name']}</b>\n"
+            f"{goal_line}\n"
+            f"  {streak_icon} Стрик: {streak}  •  Рекорд: {best}\n"
+        )
+    lines.append("📅 <b>Календари</b>")
+    for h in habits:
+        stats = await db.get_monthly_stats(h["id"], year, month)
+        cal = calendar_grid(stats["dates"], year, month)
+        lines.append(f"\n{h['emoji']} {h['name']}\n<code>{cal}</code>")
+
+    kb = keyboards.month_nav_kb(year, month, base_cb="statmonth")
+    # Дополнительные кнопки
+    kb.inline_keyboard.insert(-1, [
+        InlineKeyboardButton(text="💡 Инсайты", callback_data="show_insights"),
+        InlineKeyboardButton(text="📤 Экспорт", callback_data="export_data"),
+    ])
+    kb.inline_keyboard.insert(-1, [
+        InlineKeyboardButton(text="🏠 Меню", callback_data="menu"),
+    ])
+
+    text = "\n".join(lines)
+    if hasattr(target, 'message_id'):
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+
+async def _send_leaderboard(user_id: int, target):
+    leaders = await db.get_leaderboard(10)
+    rank = await db.get_user_rank(user_id)
+    xp = await db.get_user_xp(user_id)
+    _, level_name, _ = get_level(xp)
+    lines = ["🏆 <b>Таблица лидеров</b>\n"]
+    for i, row in enumerate(leaders, 1):
+        medal = rank_medal(i)
+        _, lv_name, _ = get_level(row["total_xp"])
+        name = row["display_name"] or "Аноним"
+        is_me = "← ты" if row["user_id"] == user_id else ""
+        lines.append(f"{medal} <b>{name}</b>  {lv_name}\n   ⚡ {row['total_xp']} XP  {is_me}")
+    lines.append(f"\n📍 Твоё место: #{rank}  •  ⚡ {xp} XP  •  {level_name}")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="show_profile")],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="show_leaderboard")],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
+    ])
+    text = "\n".join(lines)
+    if hasattr(target, 'message_id'):
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+
+async def _send_week(user_id: int, target):
+    habits = await db.get_habits(user_id)
+    if not habits:
+        text = "Нет привычек."
+        if hasattr(target, 'message_id'):
+            await target.answer(text)
+        else:
+            await target.edit_text(text)
+        return
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    days = [week_start + timedelta(days=i) for i in range(7)]
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    header = "  " + " ".join(f"{d:>2}" for d in day_names)
+    lines = [f"📅 <b>Неделя {week_start.strftime('%d.%m')}–{days[-1].strftime('%d.%m')}</b>\n",
+             f"<code>{header}"]
+    for h in habits:
+        week_done = await db.get_week_completions(h["id"])
+        row = f"{h['emoji']} "
+        for d in days:
+            row += "✅" if d.isoformat() in week_done else ("·· " if d > today else "❌ ")
+        lines.append(row)
+    lines.append("</code>")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats"),
+         InlineKeyboardButton(text="📝 Заметки", callback_data="show_notes_history")],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
+    ])
+    text = "\n".join(lines)
+    if hasattr(target, 'message_id'):
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 def register_handlers(dp: Dispatcher, bot: Bot):
 
     # ── Статистика ───────────────────────────────────────────────────────
@@ -25,69 +158,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def cb_show_stats(cb: CallbackQuery):
         await _send_stats(cb.from_user.id, cb.message, year=date.today().year, month=date.today().month)
 
-    async def _send_stats(user_id: int, target, year: int = None, month: int = None,
-                          habit_id: int = None, category: str = None):
-        today = date.today()
-        year = year or today.year
-        month = month or today.month
-
-        if habit_id:
-            habits = [await db.get_habit(habit_id)]
-            habits = [h for h in habits if h]
-        elif category:
-            habits = await db.get_habits(user_id, include_paused=False, category=category)
-        else:
-            habits = await db.get_habits(user_id)
-
-        if not habits:
-            text = "Нет привычек. Добавь первую!"
-            if hasattr(target, 'message_id'):
-                await target.answer(text)
-            else:
-                await target.edit_text(text)
-            return
-
-        lines = [f"📊 <b>Статистика — {format_month_ru(year, month)}</b>\n"]
-        for h in habits:
-            streak = await db.get_streak(h["id"])
-            best = await db.get_best_streak(h["id"])
-            stats = await db.get_monthly_stats(h["id"], year, month)
-            streak_icon = "🔥" if streak >= 3 else ("✨" if streak > 0 else "💤")
-            if h["monthly_goal"]:
-                bar = goal_progress_bar(stats["completed"], h["monthly_goal"])
-                goal_line = f"  {bar} {stats['completed']}/{h['monthly_goal']} дн."
-            else:
-                bar = progress_bar(stats["percent"])
-                goal_line = f"  {bar} {stats['percent']}%"
-            lines.append(
-                f"{h['emoji']} <b>{h['name']}</b>\n"
-                f"{goal_line}\n"
-                f"  {streak_icon} Стрик: {streak}  •  Рекорд: {best}\n"
-            )
-        lines.append("📅 <b>Календари</b>")
-        for h in habits:
-            stats = await db.get_monthly_stats(h["id"], year, month)
-            cal = calendar_grid(stats["dates"], year, month)
-            lines.append(f"\n{h['emoji']} {h['name']}\n<code>{cal}</code>")
-
-        kb = keyboards.month_nav_kb(year, month, base_cb="statmonth")
-        # Дополнительные кнопки
-        kb.inline_keyboard.insert(-1, [
-            InlineKeyboardButton(text="💡 Инсайты", callback_data="show_insights"),
-            InlineKeyboardButton(text="📤 Экспорт", callback_data="export_data"),
-        ])
-        kb.inline_keyboard.insert(-1, [
-            InlineKeyboardButton(text="🏠 Меню", callback_data="menu"),
-        ])
-
-        text = "\n".join(lines)
-        if hasattr(target, 'message_id'):
-            await target.answer(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
     @dp.callback_query(F.data.startswith("statmonth_"))
     async def cb_statmonth(cb: CallbackQuery):
@@ -110,32 +180,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
     # ── Рейтинг ──────────────────────────────────────────────────────────
-    async def _send_leaderboard(user_id: int, target):
-        leaders = await db.get_leaderboard(10)
-        rank = await db.get_user_rank(user_id)
-        xp = await db.get_user_xp(user_id)
-        _, level_name, _ = get_level(xp)
-        lines = ["🏆 <b>Таблица лидеров</b>\n"]
-        for i, row in enumerate(leaders, 1):
-            medal = rank_medal(i)
-            _, lv_name, _ = get_level(row["total_xp"])
-            name = row["display_name"] or "Аноним"
-            is_me = "← ты" if row["user_id"] == user_id else ""
-            lines.append(f"{medal} <b>{name}</b>  {lv_name}\n   ⚡ {row['total_xp']} XP  {is_me}")
-        lines.append(f"\n📍 Твоё место: #{rank}  •  ⚡ {xp} XP  •  {level_name}")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="show_profile")],
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data="show_leaderboard")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
-        ])
-        text = "\n".join(lines)
-        if hasattr(target, 'message_id'):
-            await target.answer(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                await target.answer(text, reply_markup=kb, parse_mode="HTML")
 
     @dp.callback_query(F.data == "show_leaderboard")
     async def cb_show_leaderboard(cb: CallbackQuery):
@@ -147,42 +191,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def cb_show_week(cb: CallbackQuery):
         await _send_week(cb.from_user.id, cb.message)
 
-    async def _send_week(user_id: int, target):
-        habits = await db.get_habits(user_id)
-        if not habits:
-            text = "Нет привычек."
-            if hasattr(target, 'message_id'):
-                await target.answer(text)
-            else:
-                await target.edit_text(text)
-            return
-        today = date.today()
-        week_start = today - timedelta(days=today.weekday())
-        days = [week_start + timedelta(days=i) for i in range(7)]
-        day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-        header = "  " + " ".join(f"{d:>2}" for d in day_names)
-        lines = [f"📅 <b>Неделя {week_start.strftime('%d.%m')}–{days[-1].strftime('%d.%m')}</b>\n",
-                 f"<code>{header}"]
-        for h in habits:
-            week_done = await db.get_week_completions(h["id"])
-            row = f"{h['emoji']} "
-            for d in days:
-                row += "✅" if d.isoformat() in week_done else ("·· " if d > today else "❌ ")
-            lines.append(row)
-        lines.append("</code>")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="show_stats"),
-             InlineKeyboardButton(text="📝 Заметки", callback_data="show_notes_history")],
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
-        ])
-        text = "\n".join(lines)
-        if hasattr(target, 'message_id'):
-            await target.answer(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
 
     # ── Экспорт ──────────────────────────────────────────────────────────
     @dp.callback_query(F.data == "export_data")
