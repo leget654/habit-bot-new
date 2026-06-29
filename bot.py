@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 
 from app import db
 from app.sqlite_storage import create_storage
-from app.handlers import base, habits, add_habit, stats, manage, social
+from app.handlers import base, habits, add_habit, stats, manage, social, shared
 from app.services.scheduler import setup_scheduler
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -39,6 +39,7 @@ async def main():
     stats.register_handlers(dp, bot)
     manage.register_handlers(dp, bot)
     social.register_handlers(dp, bot)
+    shared.register_handlers(dp, bot)
     logger.info("Handlers registered")
 
     # 3. APScheduler
