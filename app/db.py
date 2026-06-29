@@ -29,6 +29,8 @@ if USE_POSTGRES:
         create_challenge, get_active_challenges, get_challenge_completions,
         start_time_entry, stop_time_entry, get_active_time_entry,
         export_user_data,
+        create_shared_habit, get_shared_habits, get_shared_streak,
+        get_shared_today_status, delete_shared_habit,
     )
     logger.info("Using PostgreSQL backend")
 else:
@@ -51,5 +53,7 @@ else:
         create_challenge, get_active_challenges, get_challenge_completions,
         start_time_entry, stop_time_entry, get_active_time_entry,
         export_user_data,
+        create_shared_habit, get_shared_habits, get_shared_streak,
+        get_shared_today_status, delete_shared_habit,
     )
     logger.info("Using SQLite backend (local dev mode)")
