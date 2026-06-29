@@ -16,43 +16,45 @@ from ..services.gamification import try_freeze_yesterday
 logger = logging.getLogger(__name__)
 
 
+async def send_friends_screen(user_id: int, target):
+    """Экран друзей — на уровне модуля, доступен из base.py."""
+    friends = await db.get_friends(user_id)
+    pending = await db.get_pending_friend_requests(user_id)
+    user = await db.get_user(user_id)
+    ref_code = user.get("referral_code") if user else "?"
+
+    lines = [f"👥 <b>Друзья</b>\n"]
+    if friends:
+        for f in friends:
+            last = await db.get_last_activity(f["user_id"])
+            last_str = last.strftime("%d.%m") if last else "никогда"
+            lines.append(f"• {f['display_name']} · ⚡{f['total_xp']} · посл. активность: {last_str}")
+    else:
+        lines.append("<i>Пока нет друзей</i>")
+
+    lines.append(f"\n📨 Заявки в друзья: {len(pending)}")
+    lines.append(f"🔗 Реферальный код: <code>{ref_code}</code>")
+    lines.append(f"   Поделись ссылкой: <code>https://t.me/your_bot?start={ref_code}</code>")
+    lines.append(f"   За друга — {REFERRAL_PREMIUM_DAYS} дня Premium бесплатно!")
+
+    kb = keyboards.friends_kb()
+    text = "\n".join(lines)
+    if hasattr(target, 'message_id'):
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        try:
+            await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 def register_handlers(dp: Dispatcher, bot: Bot):
 
     # ── Друзья ───────────────────────────────────────────────────────────
-    async def _send_friends_screen(user_id: int, target):
-        friends = await db.get_friends(user_id)
-        pending = await db.get_pending_friend_requests(user_id)
-        user = await db.get_user(user_id)
-        ref_code = user.get("referral_code") if user else "?"
-
-        lines = [f"👥 <b>Друзья</b>\n"]
-        if friends:
-            for f in friends:
-                last = await db.get_last_activity(f["user_id"])
-                last_str = last.strftime("%d.%m") if last else "никогда"
-                lines.append(f"• {f['display_name']} · ⚡{f['total_xp']} · посл. активность: {last_str}")
-        else:
-            lines.append("<i>Пока нет друзей</i>")
-
-        lines.append(f"\n📨 Заявки в друзья: {len(pending)}")
-        lines.append(f"🔗 Реферальный код: <code>{ref_code}</code>")
-        lines.append(f"   Поделись ссылкой: <code>https://t.me/your_bot?start={ref_code}</code>")
-        lines.append(f"   За друга — {REFERRAL_PREMIUM_DAYS} дня Premium бесплатно!")
-
-        kb = keyboards.friends_kb()
-        text = "\n".join(lines)
-        if hasattr(target, 'message_id'):
-            await target.answer(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            try:
-                await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                await target.answer(text, reply_markup=kb, parse_mode="HTML")
-
     @dp.callback_query(F.data == "show_friends")
     async def cb_show_friends(cb: CallbackQuery):
         await db.ensure_user(cb.from_user.id, cb.from_user.first_name)
-        await _send_friends_screen(cb.from_user.id, cb.message)
+        await send_friends_screen(cb.from_user.id, cb.message)
 
     @dp.callback_query(F.data == "friend_add")
     async def cb_friend_add(cb: CallbackQuery, state: FSMContext):
