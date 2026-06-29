@@ -10,6 +10,18 @@ from ..constants import (
 
 async def get_subscription_status(user_id: int) -> dict:
     """Returns dict with: is_premium, is_trial, trial_days_left, premium_until."""
+    # Проверяем админский бесконечный премиум
+    from ..constants import ADMIN_USER_IDS
+    if user_id in ADMIN_USER_IDS:
+        from datetime import date as _date
+        far_future = _date(2999, 12, 31)
+        return {
+            "is_premium": True,
+            "is_trial": False,
+            "trial_days_left": 0,
+            "premium_until": far_future,
+        }
+
     user = await db.get_user(user_id)
     if not user:
         return {"is_premium": False, "is_trial": False, "trial_days_left": 0, "premium_until": None}
