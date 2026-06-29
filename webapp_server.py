@@ -453,6 +453,226 @@ def make_app(bot_token: str, db_helpers: dict, dev_mode: bool = False):
         from app.constants import HABIT_TEMPLATES
         return web.json_response({"templates": HABIT_TEMPLATES})
 
+    # ── Друзья ────────────────────────────────────────────────────────────
+
+    async def handle_get_friends(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        friends = await db_helpers["get_friends"](user_id)
+        user = await db_helpers["get_user"](user_id)
+        ref_code = user.get("referral_code", "") if user else ""
+        result = []
+        for f in friends:
+            last = await db_helpers["get_last_activity"](f["user_id"])
+            result.append({
+                "user_id": f["user_id"],
+                "display_name": f["display_name"],
+                "total_xp": f["total_xp"],
+                "last_activity": last.isoformat() if last else None,
+            })
+        return web.json_response({"friends": result, "referral_code": ref_code})
+
+    async def handle_add_friend(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        body = await request.json()
+        friend_id = int(body.get("friend_id", 0))
+        if friend_id == user_id:
+            return web.json_response({"error": "cannot add self"}, status=400)
+        target = await db_helpers["get_user"](friend_id)
+        if not target:
+            return web.json_response({"error": "user not found"}, status=404)
+        ok = await db_helpers["send_friend_request"](user_id, friend_id)
+        if not ok:
+            return web.json_response({"error": "already sent"}, status=400)
+        return web.json_response({"ok": True, "friend_name": target.get("display_name", str(friend_id))})
+
+    async def handle_accept_friend(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        friend_id = int(request.match_info["friend_id"])
+        await db_helpers["accept_friend_request"](user_id, friend_id)
+        return web.json_response({"ok": True})
+
+    async def handle_decline_friend(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        friend_id = int(request.match_info["friend_id"])
+        from app.db_helper import execute
+        await execute("DELETE FROM friends WHERE user_id=$1 AND friend_id=$2", friend_id, user_id)
+        return web.json_response({"ok": True})
+
+    async def handle_friend_requests(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        pending = await db_helpers["get_pending_friend_requests"](user_id)
+        return web.json_response({"requests": [dict(r) for r in pending]})
+
+    # ── Парные привычки ───────────────────────────────────────────────────
+
+    async def handle_get_shared(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        shared = await db_helpers["get_shared_habits"](user_id)
+        result = []
+        for s in shared:
+            streak = await db_helpers["get_shared_streak"](s["my_habit_id"], s["partner_habit_id"])
+            status = await db_helpers["get_shared_today_status"](s["my_habit_id"], s["partner_habit_id"])
+            result.append({
+                "id": s["id"],
+                "my_habit_id": s["my_habit_id"],
+                "my_name": s["my_name"],
+                "my_emoji": s["my_emoji"],
+                "partner_habit_id": s["partner_habit_id"],
+                "partner_name": s["partner_name"],
+                "partner_emoji": s["partner_emoji"],
+                "partner_display_name": s["partner_display_name"],
+                "shared_streak": streak,
+                "today": status,
+            })
+        return web.json_response({"shared": result})
+
+    async def handle_create_shared(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        body = await request.json()
+        my_habit_id = int(body.get("my_habit_id"))
+        friend_habit_id = int(body.get("friend_habit_id"))
+        friend_id = int(body.get("friend_id"))
+        sid = await db_helpers["create_shared_habit"](my_habit_id, friend_habit_id, user_id, friend_id)
+        if not sid:
+            return web.json_response({"error": "already linked or invalid"}, status=400)
+        return web.json_response({"ok": True, "id": sid})
+
+    async def handle_delete_shared(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        shared_id = int(request.match_info["shared_id"])
+        ok = await db_helpers["delete_shared_habit"](shared_id, user_id)
+        return web.json_response({"ok": ok})
+
+    # ── Достижения ────────────────────────────────────────────────────────
+
+    async def handle_get_achievements(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        from app.constants import ACHIEVEMENTS, EXTRA_ACHIEVEMENTS
+        earned = await db_helpers["get_user_achievements"](user_id)
+        earned_ids = {(r["habit_id"], r["achievement_id"]) for r in earned}
+        earned_extra = {r["achievement_id"] for r in earned if r["habit_id"] is None}
+        habits = await db_helpers["get_habits"](user_id, include_paused=True)
+        result = []
+        for h in habits:
+            streak = await db_helpers["get_streak"](h["id"])
+            achs = []
+            for ach in ACHIEVEMENTS:
+                achs.append({
+                    "id": ach["id"], "icon": ach["icon"], "title": ach["title"],
+                    "desc": ach["desc"], "streak_required": ach["streak"],
+                    "earned": (h["id"], ach["id"]) in earned_ids,
+                })
+            result.append({"habit_id": h["id"], "name": h["name"], "emoji": h["emoji"], "streak": streak, "achievements": achs})
+        extras = []
+        for ach in EXTRA_ACHIEVEMENTS:
+            extras.append({
+                "id": ach["id"], "icon": ach["icon"], "title": ach["title"],
+                "desc": ach["desc"], "earned": ach["id"] in earned_extra,
+            })
+        return web.json_response({"habit_achievements": result, "extra_achievements": extras})
+
+    # ── Квесты ────────────────────────────────────────────────────────────
+
+    async def handle_get_quests(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        from app.constants import DAILY_QUESTS
+        from datetime import date as _date
+        result = []
+        for q in DAILY_QUESTS:
+            entry = await db_helpers["get_or_create_today_quest"](user_id, q["id"])
+            result.append({
+                "id": q["id"], "icon": q["icon"], "title": q["title"],
+                "target": q.get("target"), "progress": entry["progress"],
+                "completed": bool(entry["completed"]),
+            })
+        user = await db_helpers["get_user"](user_id)
+        total = user.get("quest_count_total", 0) if user else 0
+        return web.json_response({"quests": result, "total_completed": total})
+
+    # ── Заморозки ─────────────────────────────────────────────────────────
+
+    async def handle_get_freezes(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        from app.constants import STREAK_FREEZE_PER_WEEK
+        from datetime import date as _date, timedelta as _td
+        habits = await db_helpers["get_habits"](user_id)
+        yesterday = _date.today() - _td(days=1)
+        done_y = await db_helpers["get_completions_for_date"](user_id, yesterday)
+        done_today = await db_helpers["get_today_completions"](user_id)
+        result = []
+        for h in habits:
+            streak = await db_helpers["get_streak"](h["id"])
+            freezes = await db_helpers["get_freezes_this_week"](user_id, h["id"])
+            can = await db_helpers["can_freeze"](user_id, h["id"])
+            needs = h["id"] not in done_y and h["id"] not in done_today and streak > 0
+            result.append({
+                "habit_id": h["id"], "name": h["name"], "emoji": h["emoji"],
+                "streak": streak, "freezes_used": freezes,
+                "freezes_limit": STREAK_FREEZE_PER_WEEK, "can_freeze": can, "needs_freeze": needs,
+            })
+        return web.json_response({"habits": result, "limit_per_week": STREAK_FREEZE_PER_WEEK})
+
+    async def handle_do_freeze(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        habit_id = int(request.match_info["habit_id"])
+        from app.services.gamification import try_freeze_yesterday
+        success, message = await try_freeze_yesterday(user_id, habit_id)
+        return web.json_response({"ok": success, "message": message})
+
+    # ── Reorder ───────────────────────────────────────────────────────────
+
+    async def handle_reorder_one(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        habit_id = int(request.match_info["habit_id"])
+        body = await request.json()
+        direction = body.get("direction")
+        if direction not in ("up", "down"):
+            return web.json_response({"error": "direction required"}, status=400)
+        await db_helpers["move_habit"](habit_id, direction)
+        return web.json_response({"ok": True})
+
+    # ── Экспорт ───────────────────────────────────────────────────────────
+
+    async def handle_export_json(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        data = await db_helpers["export_json"](user_id)
+        return web.json_response({"data": data})
+
+    async def handle_export_csv(request):
+        user_id = get_user_id(request)
+        if not user_id:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        csv_str = await db_helpers["export_csv"](user_id)
+        return web.json_response({"csv": csv_str})
+
     # ── Роутинг ──────────────────────────────────────────────────────────
 
     app.router.add_get("/", handle_index)
@@ -479,6 +699,22 @@ def make_app(bot_token: str, db_helpers: dict, dev_mode: bool = False):
     app.router.add_post("/api/profile/username", handle_set_username)
     app.router.add_get("/api/categories", handle_categories)
     app.router.add_get("/api/templates", handle_templates)
+    # ── Новые эндпоинты ──
+    app.router.add_get("/api/friends", handle_get_friends)
+    app.router.add_post("/api/friends/add", handle_add_friend)
+    app.router.add_post("/api/friends/{friend_id}/accept", handle_accept_friend)
+    app.router.add_post("/api/friends/{friend_id}/decline", handle_decline_friend)
+    app.router.add_get("/api/friends/requests", handle_friend_requests)
+    app.router.add_get("/api/shared", handle_get_shared)
+    app.router.add_post("/api/shared/create", handle_create_shared)
+    app.router.add_post("/api/shared/{shared_id}/delete", handle_delete_shared)
+    app.router.add_get("/api/achievements", handle_get_achievements)
+    app.router.add_get("/api/quests", handle_get_quests)
+    app.router.add_get("/api/freezes", handle_get_freezes)
+    app.router.add_post("/api/freezes/{habit_id}/freeze", handle_do_freeze)
+    app.router.add_post("/api/habits/{habit_id}/reorder", handle_reorder_one)
+    app.router.add_get("/api/export/json", handle_export_json)
+    app.router.add_get("/api/export/csv", handle_export_csv)
     app.router.add_static("/static", "webapp", show_index=False)
 
     return app
