@@ -53,7 +53,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     # ── Друзья ───────────────────────────────────────────────────────────
     @dp.callback_query(F.data == "show_friends")
     async def cb_show_friends(cb: CallbackQuery):
-        await db.ensure_user(cb.from_user.id, cb.from_user.first_name)
+        await db.ensure_user(cb.from_user.id, cb.from_user.first_name, username=cb.from_user.username)
         await send_friends_screen(cb.from_user.id, cb.message)
 
     @dp.callback_query(F.data == "friend_add")
@@ -61,39 +61,46 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         await state.set_state(AddFriend.waiting_friend_id)
         await cb.message.edit_text(
             "➕ <b>Добавить друга</b>\n\n"
-            "Пришли ID пользователя Telegram (число) или его @username.\n"
-            "<i>Чтобы узнать свой ID, можно написать @userinfobot</i>",
+            "Пришли <b>@username</b> друга (например <code>@alex</code>) или его числовой ID.\n\n"
+            "<i>Важно: друг должен сначала запустить бота командой /start</i>\n"
+            "<i>Узнать ID: @userinfobot</i>",
             parse_mode="HTML"
         )
 
     @dp.message(AddFriend.waiting_friend_id)
     async def fsm_friend_id(msg: Message, state: FSMContext):
         text = msg.text.strip()
-        # Пробуем распарсить как ID
         friend_id = None
+        target_user = None
+
         if text.isdigit():
+            # Числовой ID
             friend_id = int(text)
-        elif text.startswith("@"):
-            # По username искать не будем — попросим ID
-            await msg.answer(
-                "Поиск по @username не поддерживается. Пришли числовой ID пользователя.\n"
-                "<i>Узнать ID можно у @userinfobot</i>",
-                parse_mode="HTML"
-            )
-            return
-        else:
-            try:
-                friend_id = int(text)
-            except ValueError:
-                await msg.answer("Пришли числовой ID или @username.")
+            target_user = await db.get_user(friend_id)
+        elif text.startswith("@") or not text.isdigit():
+            # @username — ищем в БД
+            username = text.lstrip("@").lower()
+            target_user = await db.get_user_by_username(username)
+            if not target_user:
+                await msg.answer(
+                    f"❌ Пользователь @{username} не найден.\n\n"
+                    "Возможно, друг ещё не запускал бота. "
+                    "Попроси его нажать <code>/start</code> в боте, "
+                    "после этого ты сможешь добавить его по @username.",
+                    parse_mode="HTML",
+                    reply_markup=keyboards.main_reply_kb()
+                )
+                await state.clear()
                 return
+            friend_id = target_user["user_id"]
+        else:
+            await msg.answer("Пришли числовой ID или @username.")
+            return
 
         if friend_id == msg.from_user.id:
             await msg.answer("Нельзя добавить самого себя 😅")
             return
 
-        # Проверяем, существует ли такой пользователь
-        target_user = await db.get_user(friend_id)
         if not target_user:
             await msg.answer(
                 f"Пользователь с ID {friend_id} не найден в боте. "
