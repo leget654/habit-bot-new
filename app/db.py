@@ -14,6 +14,7 @@ if USE_POSTGRES:
     from .db_postgres import (
         get_pool, close_pool, init_db,
         ensure_user, user_exists, get_user, set_display_name, set_timezone, get_timezone,
+        get_user_by_username,
         add_xp, get_user_xp, get_leaderboard, get_user_rank,
         get_habits, create_habit, get_habit, rename_habit, set_habit_paused, delete_habit,
         update_habit_category, reorder_habits, move_habit, set_habit_target_minutes,
@@ -38,6 +39,7 @@ else:
     from .db_sqlite import (
         get_pool, close_pool, init_db,
         ensure_user, user_exists, get_user, set_display_name, set_timezone, get_timezone,
+        get_user_by_username,
         add_xp, get_user_xp, get_leaderboard, get_user_rank,
         get_habits, create_habit, get_habit, rename_habit, set_habit_paused, delete_habit,
         update_habit_category, reorder_habits, move_habit, set_habit_target_minutes,
