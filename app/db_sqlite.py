@@ -66,9 +66,15 @@ async def init_db():
                 referrer_id INTEGER,
                 referral_code TEXT,
                 trial_started_at DATE,
-                premium_until DATE
+                premium_until DATE,
+                username TEXT
             )
         """)
+        # Миграция: добавляем колонку username
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN username TEXT")
+        except Exception:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS habits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,18 +208,21 @@ async def init_db():
     logger.info("SQLite database initialized")
 
 
-async def ensure_user(user_id: int, first_name: str, referrer_code: Optional[str] = None):
+async def ensure_user(user_id: int, first_name: str, referrer_code: Optional[str] = None, username: Optional[str] = None):
     async with _connect() as db:
         cur = await db.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
         exists = await cur.fetchone()
         if not exists:
             rc = f"ref_{user_id}_{user_id % 10000}"
-            await db.execute("INSERT INTO users (user_id, display_name, referral_code) VALUES (?,?,?)", (user_id, first_name, rc))
+            await db.execute("INSERT INTO users (user_id, display_name, referral_code, username) VALUES (?,?,?,?)", (user_id, first_name, rc, username))
             if referrer_code:
                 cur = await db.execute("SELECT user_id FROM users WHERE referral_code=?", (referrer_code,))
                 ref = await cur.fetchone()
                 if ref and ref[0] != user_id:
                     await db.execute("UPDATE users SET referrer_id=? WHERE user_id=?", (ref[0], user_id))
+        else:
+            if username:
+                await db.execute("UPDATE users SET username=? WHERE user_id=? AND (username IS NULL OR username != ?)", (username, user_id, username))
         await db.commit()
     from .services.subscription import start_trial_if_new, grant_subscription
     await start_trial_if_new(user_id)
@@ -224,6 +233,15 @@ async def ensure_user(user_id: int, first_name: str, referrer_code: Optional[str
         if row and row[0]:
             from .constants import REFERRAL_PREMIUM_DAYS
             await grant_subscription(row[0], REFERRAL_PREMIUM_DAYS)
+
+
+async def get_user_by_username(username: str) -> dict | None:
+    """Ищет пользователя по @username (без @)."""
+    username = username.lstrip('@').lower()
+    async with _connect() as db:
+        cur = await db.execute("SELECT * FROM users WHERE LOWER(username)=?", (username,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 async def user_exists(user_id: int) -> bool:
