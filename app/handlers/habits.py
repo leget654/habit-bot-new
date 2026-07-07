@@ -18,7 +18,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     @dp.callback_query(F.data == "show_today")
     async def cb_show_today(cb: CallbackQuery):
-        await db.ensure_user(cb.from_user.id, cb.from_user.first_name)
+        await db.ensure_user(cb.from_user.id, cb.from_user.first_name, username=cb.from_user.username)
         habits = await db.get_habits(cb.from_user.id)
         if not habits:
             await cb.answer("Сначала добавь привычки!", show_alert=True)
