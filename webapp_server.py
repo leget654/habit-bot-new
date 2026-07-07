@@ -478,16 +478,62 @@ def make_app(bot_token: str, db_helpers: dict, dev_mode: bool = False):
         if not user_id:
             return web.json_response({"error": "unauthorized"}, status=401)
         body = await request.json()
-        friend_id = int(body.get("friend_id", 0))
+        identifier = str(body.get("friend_id") or body.get("username") or "").strip()
+        if not identifier:
+            return web.json_response({"error": "friend_id or username required"}, status=400)
+
+        friend_id = None
+        friend_user = None
+
+        # Если введён @username
+        if identifier.startswith("@") or not identifier.isdigit():
+            username = identifier.lstrip("@").lower()
+            friend_user = await db_helpers["get_user_by_username"](username)
+            if not friend_user:
+                return web.json_response({
+                    "error": "user_not_started_bot",
+                    "message": f"Пользователь @{username} не запускал бота. Попроси друга нажать /start в боте."
+                }, status=404)
+            friend_id = friend_user["user_id"]
+        else:
+            # Числовой ID
+            friend_id = int(identifier)
+            friend_user = await db_helpers["get_user"](friend_id)
+            if not friend_user:
+                return web.json_response({"error": "user not found"}, status=404)
+
         if friend_id == user_id:
             return web.json_response({"error": "cannot add self"}, status=400)
-        target = await db_helpers["get_user"](friend_id)
-        if not target:
-            return web.json_response({"error": "user not found"}, status=404)
+
         ok = await db_helpers["send_friend_request"](user_id, friend_id)
         if not ok:
             return web.json_response({"error": "already sent"}, status=400)
-        return web.json_response({"ok": True, "friend_name": target.get("display_name", str(friend_id))})
+
+        # Отправляем заявку другу через бота
+        bot = db_helpers.get("bot")
+        if bot:
+            try:
+                me = await db_helpers["get_user"](user_id)
+                my_name = me.get("display_name") or "Пользователь" if me else "Пользователь"
+                my_username = me.get("username") if me else None
+                name_line = f"@{my_username}" if my_username else my_name
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                await bot.send_message(
+                    friend_id,
+                    f"👥 <b>Новая заявка в друзья!</b>\n\n"
+                    f"<b>{name_line}</b> хочет добавить тебя в друзья.\n\n"
+                    f"Прими заявку, чтобы видеть прогресс друг друга, создавать парные привычки и челленджи!",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="✅ Принять", callback_data=f"friendaccept_{user_id}")],
+                        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"frienddecline_{user_id}")],
+                    ])
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify friend {friend_id}: {e}")
+
+        friend_name = friend_user.get("display_name") or friend_user.get("username") or str(friend_id)
+        return web.json_response({"ok": True, "friend_name": friend_name, "friend_id": friend_id})
 
     async def handle_accept_friend(request):
         user_id = get_user_id(request)
