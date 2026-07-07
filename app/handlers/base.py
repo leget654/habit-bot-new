@@ -41,7 +41,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             if len(parts) > 1 and parts[1].startswith("ref_"):
                 referrer_code = parts[1]
         is_new = not await db.user_exists(msg.from_user.id)
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, referrer_code)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, referrer_code, username=msg.from_user.username)
         await start_trial_if_new(msg.from_user.id)
 
         if is_new:
@@ -92,7 +92,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     # ── Premium ──────────────────────────────────────────────────────────
     @dp.message(Command("premium"))
     async def cmd_premium(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         await _send_premium_screen(msg.from_user.id, msg)
 
     @dp.callback_query(F.data == "show_premium")
@@ -171,7 +171,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     # ── Reply-клавиатура роутинг ─────────────────────────────────────────
     @dp.message(F.text == "📋 Привычки")
     async def reply_habits(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         habits = await db.get_habits(msg.from_user.id)
         if not habits:
             await msg.answer("Нет привычек. Нажми ➕ Добавить!", reply_markup=keyboards.main_reply_kb())
@@ -185,24 +185,24 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     @dp.message(F.text == "📊 Статистика")
     async def reply_stats(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         from .stats import _send_stats
         await _send_stats(msg.from_user.id, msg, year=date.today().year, month=date.today().month)
 
     @dp.message(F.text == "🏆 Рейтинг")
     async def reply_leaderboard(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         from .stats import _send_leaderboard
         await _send_leaderboard(msg.from_user.id, msg)
 
     @dp.message(F.text == "👤 Мой профиль")
     async def reply_profile(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         await _send_profile(msg.from_user.id, msg)
 
     @dp.message(F.text == "➕ Добавить")
     async def reply_add(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         await msg.answer("➕ Выбери шаблон или создай свою:", reply_markup=keyboards.templates_kb())
 
     @dp.message(F.text == "⚙️ Управление")
@@ -211,12 +211,12 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     @dp.message(F.text == "✨ Premium")
     async def reply_premium(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         await _send_premium_screen(msg.from_user.id, msg)
 
     @dp.message(F.text == "👥 Друзья")
     async def reply_friends(msg: Message):
-        await db.ensure_user(msg.from_user.id, msg.from_user.first_name)
+        await db.ensure_user(msg.from_user.id, msg.from_user.first_name, username=msg.from_user.username)
         from .social import send_friends_screen
         await send_friends_screen(msg.from_user.id, msg)
 
@@ -271,7 +271,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     @dp.callback_query(F.data == "show_profile")
     async def cb_show_profile(cb: CallbackQuery):
-        await db.ensure_user(cb.from_user.id, cb.from_user.first_name)
+        await db.ensure_user(cb.from_user.id, cb.from_user.first_name, username=cb.from_user.username)
         await _send_profile(cb.from_user.id, cb.message)
 
     @dp.callback_query(F.data == "set_username")
